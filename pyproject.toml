@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.11.2",
+    "nmslib==2.1.2",
     "numpy>=2.5.4",
     "pandas>=3.1.1",
     "rdkit>=2026.9.1",
