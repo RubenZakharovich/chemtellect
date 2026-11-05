@@ -15,3 +15,6 @@ data/processed/
 
 # Jupyter temporary files
 .ipynb_checkpoints/
+
+# Generated benchmark results
+experiments/results/
