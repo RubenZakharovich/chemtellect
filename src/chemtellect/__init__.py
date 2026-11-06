@@ -1,2 +1,1 @@
-def hello() -> str:
-    return "Hello from chemtellect!"
+"""Chemtellect: molecular retrieval and benchmarking."""
