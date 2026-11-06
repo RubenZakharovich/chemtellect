@@ -12,6 +12,8 @@ from pathlib import Path
 
 from rdkit import Chem, rdBase
 
+from chemtellect.data_integrity import decode_record
+
 
 @dataclass(frozen=True)
 class RecordIssue:
@@ -62,7 +64,6 @@ class ValidationReport:
             "duplicate_structure_groups": len(duplicates),
             "records_in_duplicate_groups": duplicate_records,
             "surplus_duplicate_records": duplicate_records - len(duplicates),
-            "at_least_1100_unique_valid_structures": len(self.structures) >= 1100,
             "min_unique": self.min_unique,
             "acceptance_passed": self.acceptance_passed,
             "success": self.success,
@@ -103,22 +104,11 @@ def validate_molecules(path: Path, min_unique: int | None = None) -> ValidationR
         for line_number, raw_line in enumerate(source, 1):
             checksum.update(raw_line)
             report.total_input_records += 1
-            try:
-                record = json.loads(raw_line.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                report.integrity_errors.append(RecordIssue(line_number, None, f"Invalid JSON/UTF-8: {error}"))
+            record, source_id, error = decode_record(raw_line, identifiers)
+            if error:
+                report.integrity_errors.append(RecordIssue(line_number, source_id, error))
                 continue
-            if not isinstance(record, dict):
-                report.integrity_errors.append(RecordIssue(line_number, None, "Record is not a JSON object"))
-                continue
-            source_id = record.get("source_id")
-            if not isinstance(source_id, str) or not source_id.strip():
-                report.integrity_errors.append(RecordIssue(line_number, None, "Missing, blank, or non-string source_id"))
-                continue
-            if source_id in identifiers:
-                report.integrity_errors.append(RecordIssue(line_number, source_id, "Duplicate source_id"))
-                continue
-            identifiers.add(source_id)
+            assert record is not None and source_id is not None
             canonical, reason = canonicalize_smiles(record.get("smiles"))
             if canonical is None:
                 report.invalid_records.append(RecordIssue(line_number, source_id, reason or "Invalid molecule"))
@@ -145,8 +135,7 @@ def format_summary(report: ValidationReport, max_examples: int = 5) -> str:
              f"RDKit: {report.rdkit_version} (sanitize=True; canonical=True; isomericSmiles=True)"]
     for key in ("total_input_records", "successfully_parsed_records", "invalid_molecular_records",
                 "integrity_rejected_records", "unique_canonical_structures", "duplicate_structure_groups",
-                "records_in_duplicate_groups", "surplus_duplicate_records",
-                "at_least_1100_unique_valid_structures"):
+                "records_in_duplicate_groups", "surplus_duplicate_records"):
         lines.append(f"{key.replace('_', ' ').capitalize()}: {data[key]}")
     for label, issues in (("Integrity", report.integrity_errors), ("Chemical", report.invalid_records)):
         for issue in issues[:max_examples]:

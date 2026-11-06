@@ -118,7 +118,7 @@ def test_minimum_and_empty_file(tmp_path):
     assert report.total_input_records == 0
     assert not report.acceptance_passed
     assert not report.success
-    assert not report.to_dict()["at_least_1100_unique_valid_structures"]
+    assert "at_least_1100_unique_valid_structures" not in report.to_dict()
     assert validate_molecules(path, 0).success
     with pytest.raises(ValueError, match="nonnegative"):
         validate_molecules(path, -1)
