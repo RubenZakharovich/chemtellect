@@ -47,7 +47,7 @@ def test_reject_unsafe(config, changes):
 
 def test_query(config):
     command = build_command(config)
-    assert command[:6] == ['ssh', '-T', '-o', 'BatchMode=yes', '--', 'chemtellect-server']
+    assert command[:6] == ['ssh', '-T', '-o', 'BatchMode=no', '--', 'chemtellect-server']
     remote = shlex.split(command[-1])
     assert remote[:4] == ['mongo', '--quiet', '--norc', '--eval']
     js = remote[4]

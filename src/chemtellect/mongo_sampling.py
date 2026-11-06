@@ -87,7 +87,7 @@ def build_command(config: SamplingConfig) -> list[str]:
         "if (Object.prototype.hasOwnProperty.call(doc,k)) row[k] = doc[k];});"
         "print(JSON.stringify(row));});"
     )
-    return ["ssh", "-T", "-o", "BatchMode=yes", "--", config.ssh_target,
+    return ["ssh", "-T", "-o", "BatchMode=no", "--", config.ssh_target,
             shlex.join(["mongo", "--quiet", "--norc", "--eval", script])]
 
 
