@@ -63,3 +63,65 @@ def generate_batches(records, role, generator, batch_size=1000):
             except Exception as error:
                 raise ValueError(f"{role}: {record['source_id']} line {record['line_number']}: generation failed") from error
         yield offset, vectors, {'parsing': parsing, 'generation': perf_counter_ns() - start}
+
+
+NONZERO_POLICY = 'nonzero_fingerprints_v1'
+
+
+def validate_packed(rows):
+    """Validate packed storage without unpacking or importing a backend."""
+    import numpy as np
+    if not isinstance(rows, np.ndarray) or rows.dtype != np.uint8 or rows.ndim != 2 or rows.shape[1] != 256:
+        raise ValueError('Expected uint8 ndarray of shape (n, 256) packed bytes')
+
+
+class NonzeroFingerprintError(ValueError):
+    """Unsupported zero rows, retaining all identities and the validation summary."""
+
+    def __init__(self, summary, affected_records):
+        self.summary = summary
+        self.affected_records = affected_records
+        preview = '; '.join(f"{r['role']} row {r['row_index']} source_id={r['source_id']} line={r['line_number']}"
+                            for r in affected_records[:5])
+        super().__init__(f'{NONZERO_POLICY}: {len(affected_records)} all-zero fingerprints: {preview}'
+                         + ('; further records in report' if len(affected_records) > 5 else ''))
+
+
+def validate_nonzero_fingerprints(queries, index, records):
+    """Scan every supplied packed row before either backend uses real inputs.
+
+    records contains ordered queries/index lists of equal length to the arrays.
+    Original row indices must be unique nonnegative integers within each role;
+    they may be nonconsecutive for a future selected benchmark subset. The caller
+    must supply the corresponding mapping from verified artifact loading.
+    Empty roles check zero rows. Inputs are never modified or renumbered.
+    """
+    import numpy as np
+    validate_packed(queries)
+    validate_packed(index)
+    summary = {'policy_identifier': NONZERO_POLICY, 'query_rows_checked': len(queries),
+               'index_rows_checked': len(index), 'query_zero_rows': 0, 'index_zero_rows': 0}
+    affected = []
+    # Validate both mappings completely before attributing any zero rows.
+    for role, rows in (('queries', queries), ('index', index)):
+        validate_packed(rows)
+        mapping = records.get(role) if isinstance(records, dict) else None
+        if not isinstance(mapping, list) or len(mapping) != len(rows):
+            raise ValueError(f'{role}: mapping count must match supplied rows')
+        seen = set()
+        for record in mapping:
+            if (not isinstance(record, dict) or type(record.get('row_index')) is not int
+                or record['row_index'] < 0 or record['row_index'] in seen
+                or not isinstance(record.get('source_id'), str) or not record['source_id'].strip()
+                or type(record.get('line_number')) is not int or record['line_number'] <= 0):
+                raise ValueError(f'{role}: invalid or duplicate original record mapping')
+            seen.add(record['row_index'])
+    for role, rows in (('queries', queries), ('index', index)):
+        zero_positions = np.flatnonzero(~np.any(rows, axis=1))
+        summary['query_zero_rows' if role == 'queries' else 'index_zero_rows'] = len(zero_positions)
+        for position in zero_positions:
+            record = records[role][int(position)]
+            affected.append({'role': role, **{key: record[key] for key in ('row_index','source_id','line_number')}})
+    if affected:
+        raise NonzeroFingerprintError(summary, affected)
+    return summary

@@ -204,3 +204,33 @@ instructions in the methodology. Raw pools, audits and splits remain unchanged.
 
 This checkpoint implements preparation only. Exhaustive retrieval, exact ground
 truth, recall measurements and NMSLIB/HNSW integration remain future work.
+
+## Backend compatibility verification (Step 3)
+
+`chemtellect.nmslib_adapter` converts verified packed fingerprints in memory to
+NMSLIB `bit_jaccard` input and compares direct pairwise distances with RDKit
+`1 - TanimotoSimilarity`. Notebook 03 selects the existing artifact and checks
+synthetic cases plus query/index rows 0–9 (210 real-fixture pairs). No fingerprints
+are regenerated and no HNSW graph or nearest-neighbor search is performed.
+
+```bash
+uv run pytest tests/test_nmslib_adapter.py
+uv run jupyter lab notebooks/03_backend_verification.ipynb
+```
+
+Edit the single artifact-path cell in notebook 03 to select another existing
+pool. Split linkage and output location derive from verified metadata. The
+backend-independent `nonzero_fingerprints_v1` guard scans **all saved query and
+index rows** before real backend preparation, then the small fixture checks
+compatibility. Future exact and HNSW runs must reuse this guard on all selected
+inputs. See the [nonzero policy](docs/nonzero_fingerprint_policy.md) and
+[backend methodology](docs/backend_verification.md).
+
+Reports use unique filenames under
+`experiments/results/backend_verification/<source>/<package>/<artifact_id>/`.
+Required representation and nonzero distance checks determine success. Native
+zero-input probes are unsupported diagnostics: in the tested NMSLIB 2.1.2 /
+RDKit 2026.09.1 environment, zero/zero gives NaN versus Tanimoto 0 (distance 1).
+No result is patched and no records are removed. The original failure report
+is preserved. A failed full-input guard saves a report and stops before real
+backend preparation. Compatibility checks do not establish recall or performance.
