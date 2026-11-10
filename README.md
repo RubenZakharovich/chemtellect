@@ -170,3 +170,37 @@ assesses molecular quality and canonical duplicates. Neither implies population
 representativeness. Both validators stream input, but retain identifiers/issues
 (and RDKit structure groups) in memory. Very large acquisitions will require
 streaming molecular preprocessing and further resource planning.
+
+## Fingerprint preparation checkpoint
+
+After `notebooks/01_dataset_overview.ipynb` saves an audited split,
+`notebooks/02_fingerprint_generation.ipynb` generates or verifies one artifact.
+It defaults to the existing Chemicalspace package_00 split and never creates a
+missing split. Select another approved saved pool by explicitly changing the
+split path in notebook 02. The overview now describes all eligible structures
+with `descriptor_limit: null`.
+
+`chemtellect.fingerprints` validates scientific configuration and generates
+sequential batches. `chemtellect.fingerprint_store` validates splits, packs,
+persists, verifies, reconstructs and loads registered index prefixes. Morgan
+connectivity fingerprints use radius 2, 2048 bits and chirality, bond types and
+ring membership, without molecular standardization. Storage is uint8 `(n, 256)`
+NumPy arrays with explicit little bit ordering. See [methodology](docs/fingerprints.md)
+for all scientific choices, limitations, APIs and provenance requirements.
+
+```bash
+uv run pytest
+uv run jupyter lab notebooks/02_fingerprint_generation.ipynb
+```
+
+Run notebook cells in order using the project's Python kernel. Artifacts go under
+`data/processed/<source>/<package>/fingerprints/<artifact_id>/`; unique run reports
+under `experiments/results/fingerprints/<source>/<package>/<artifact_id>/`.
+Both are excluded from Git. Rerunning verifies all persisted data and linkage,
+without generating molecules again. Corruption fails rather than regenerating.
+Interrupted staging and stale locks require explicit inspection and preservation
+or removal; they are never automatically resumed or published. See recovery
+instructions in the methodology. Raw pools, audits and splits remain unchanged.
+
+This checkpoint implements preparation only. Exhaustive retrieval, exact ground
+truth, recall measurements and NMSLIB/HNSW integration remain future work.

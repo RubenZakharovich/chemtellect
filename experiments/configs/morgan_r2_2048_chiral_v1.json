@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "generator": {
+    "radius": 2,
+    "fpSize": 2048,
+    "includeChirality": true,
+    "useBondTypes": true,
+    "includeRingMembership": true,
+    "countSimulation": false,
+    "countBounds": null,
+    "onlyNonzeroInvariants": false,
+    "includeRedundantEnvironments": false,
+    "atomInvariantsGenerator": null,
+    "bondInvariantsGenerator": null
+  },
+  "preprocessing": {
+    "input": "canonical_smiles",
+    "sanitize": true,
+    "hydrogens": "SMILES parser handling; no AddHs or RemoveHs stage",
+    "standardization": "none",
+    "disconnected_components": "keep",
+    "stereochemistry": "preserve specified; leave unspecified",
+    "atom_invariants": "standard Morgan connectivity",
+    "atom_centers": "all",
+    "ignored_atoms": [],
+    "custom_invariants": null,
+    "output": "GetFingerprint ExplicitBitVect",
+    "source_rfp": "never used",
+    "failure": "stop with role, source_id and line_number",
+    "fingerprint_deduplication": false
+  },
+  "rationale": "Fixed connectivity representation preserves saved molecular preparation and record identity; chirality may distinguish specified and unspecified stereochemistry. Future recall measures agreement with exact Tanimoto under this representation, not independently established chemical relevance."
+}

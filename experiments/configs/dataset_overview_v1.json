@@ -4,7 +4,7 @@
   "package": "package_00",
   "seed": 42,
   "query_count": 100,
-  "descriptor_limit": 5000,
+  "descriptor_limit": null,
   "expected_raw_counts": {"package_00": 1200, "package_01": 1200, "package_02": 1200, "scale_10k_00": 10500, "scale_100k_00": 102000},
   "index_sizes_by_package": {"package_00": [1000], "package_01": [1000], "package_02": [1000], "scale_10k_00": [10000], "scale_100k_00": [1000, 10000, 100000]}
 }
