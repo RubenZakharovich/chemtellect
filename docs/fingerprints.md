@@ -108,4 +108,7 @@ fingerprints. Later controlled tests will compare binary Jaccard distance with
 one minus Tanimoto using a tolerance selected at that checkpoint. No serialization
 choice or tolerance is selected here. Exhaustive comparisons, similarity matrices,
 ground truth, ranking/recall metrics, NMSLIB adapters, HNSW construction/search and
-parameter sweeps remain unimplemented. No benchmark results are claimed.
+parameter sweeps are outside this preparation checkpoint. Exact RDKit retrieval
+and persisted ground truth are implemented separately in
+[the retrieval checkpoint](exact_retrieval.md); backend compatibility has its
+own [methodology](backend_verification.md).
