@@ -2,6 +2,7 @@
 from importlib.metadata import version
 from numbers import Integral
 from pathlib import Path
+from time import perf_counter_ns
 
 import FPSim2
 from FPSim2 import FPSim2Engine
@@ -81,8 +82,12 @@ def prepare_backend(path, queries, index, config, ids=None):
         raise ValueError(f'Only inspected FPSim2 {SUPPORTED_VERSION} is supported')
     validate_configuration(config)
     ids = validate_ids(range(len(index)) if ids is None else ids, len(index))
+    t = perf_counter_ns()
     db = packed_to_native(index, ids)
+    index_conversion_ns = perf_counter_ns()-t
+    t = perf_counter_ns()
     query_rows = packed_to_native(queries, range(len(queries)))
+    query_conversion_ns = perf_counter_ns()-t
     if not np.array_equal(native_to_packed(db), index) or not np.array_equal(native_to_packed(query_rows), queries):
         raise ValueError('Native conversion round trip differs from saved bits')
     path = Path(path)
@@ -109,6 +114,7 @@ def prepare_backend(path, queries, index, config, ids=None):
     query_rows.setflags(write=False)
     return engine, query_rows, id_to_position, {
         'verified_query_rows': len(queries), 'verified_index_rows': len(index),
+        'conversion_timings_ns': {'index_conversion': index_conversion_ns, 'query_conversion': query_conversion_ns},
         'conversion_round_trip': True, 'loaded_sorted_round_trip': True,
         'internal_row_search_ids': loaded_ids, 'internal_row_original_positions': original_positions,
         'popcount_bins': [[int(c), [int(a), int(b)]] for c, (a, b) in engine.popcnt_bins],

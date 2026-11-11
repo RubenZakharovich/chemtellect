@@ -57,9 +57,10 @@ maximum-error calculation. Tolerances remain absolute 1e-6, relative zero.
 The guard has its own timing. Unique new reports preserve the original failure
 report unchanged.
 
-Exact-search and future HNSW entry points **must call the same guard on all rows
+Exact-search and HNSW entry points **must call the same guard on all rows
 selected for that run before backend preparation or graph construction**.
 The [exact retrieval runner](exact_retrieval.md) now applies this guard to every
-selected query and index row before RDKit reconstruction. HNSW retrieval remains
-unimplemented. See [backend verification](backend_verification.md) for compatibility
+selected query and index row before RDKit reconstruction. The
+[three-backend HNSW runner](hnsw.md) applies it before all backend preparation.
+See [backend verification](backend_verification.md) for compatibility
 APIs, report locations and execution commands.

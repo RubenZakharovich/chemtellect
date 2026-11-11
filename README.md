@@ -202,8 +202,8 @@ Interrupted staging and stale locks require explicit inspection and preservation
 or removal; they are never automatically resumed or published. See recovery
 instructions in the methodology. Raw pools, audits and splits remain unchanged.
 
-The preparation checkpoint is separate from exact retrieval below. Recall
-measurements and NMSLIB/HNSW retrieval integration remain future work.
+The preparation checkpoint is separate from the retrieval benchmarks below.
+Exact and approximate recall measurements use the same verified saved bits.
 
 ## Backend compatibility verification (Step 3)
 
@@ -277,4 +277,23 @@ missing historical metadata displays as “not recorded”. See
 ```bash
 .venv/bin/python -m pytest tests/test_fpsim2.py
 .venv/bin/jupyter lab notebooks/05_fpsim2_benchmark.ipynb
+```
+
+## Fixed HNSW and three-backend comparison (Step 6)
+
+`notebooks/06_hnsw_comparison.ipynb` compares freshly timed RDKit, FPSim2 and
+NMSLIB 2.1.2 HNSW with M=16, efConstruction=200, efSearch=200, one construction
+thread and sequential `knnQuery` calls. The independent `package_00` 1K pilot
+remains separate from the `scale_100k_00` parent's nested 1K/10K/100K prefixes.
+Each size gets a fresh graph and fresh exhaustive float64 ground truth.
+
+The existing overview and fingerprint workflows prepared the missing parent
+inputs with unchanged configuration and seed-42 policy. Correctness gates,
+tie-aware top-k and inclusive threshold recall, shared five-pass timing, graph
+costs, memory snapshots and checksummed charts are described in
+[HNSW methodology](docs/hnsw.md). No parameter sweep or 100M prediction is made.
+
+```bash
+.venv/bin/python -m pytest tests/test_hnsw.py
+.venv/bin/jupyter lab notebooks/06_hnsw_comparison.ipynb
 ```

@@ -1,0 +1,10 @@
+{
+  "space": "bit_jaccard",
+  "data_type": "OBJECT_AS_STRING",
+  "dtype": "FLOAT",
+  "method": "hnsw",
+  "index_params": {"M": 16, "efConstruction": 200, "indexThreadQty": 1},
+  "query_params": {"efSearch": 200},
+  "query_api": "knnQuery",
+  "concurrent_queries": 1
+}
