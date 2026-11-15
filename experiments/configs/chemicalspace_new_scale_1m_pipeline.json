@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source": "chemicalspace_new",
+  "package": "scale_1m_00",
+  "query_count": 100,
+  "index_sizes": [1000, 10000, 100000, 1000000],
+  "seed": 42,
+  "descriptor_limit": null,
+  "fingerprint_configuration": "experiments/configs/morgan_r2_2048_chiral_v1.json",
+  "hnsw_configuration": "experiments/configs/hnsw_v1.json"
+}

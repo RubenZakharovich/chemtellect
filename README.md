@@ -1,5 +1,9 @@
 # Chemtellect
 
+The reusable local raw-to-results workflow and unattended execution commands are
+documented in [docs/dataset_pipeline.md](docs/dataset_pipeline.md). Its single
+parameterized notebook is [07_dataset_pipeline.ipynb](notebooks/07_dataset_pipeline.ipynb).
+
 Experimental molecular retrieval with binary Morgan fingerprints.
 
 ## Molecular validation

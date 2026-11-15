@@ -239,6 +239,7 @@ def test_run_roundtrip_fresh_truth_graph_files_and_unchanged_inputs(tmp_path, ar
     before = {p.name: store.file_info(p) for p in directory.iterdir()}
     path, report = bench.run_comparison(tmp_path, directory, 100)
     assert report['passed'] and bench.load_comparison_run(path, tmp_path) == report
+    assert report['experiment'] == 'nested parent scaling'  # metadata, despite package_00 name
     assert before == {p.name: store.file_info(p) for p in directory.iterdir()}
     scores = np.load(path/'exact_scores.npy', allow_pickle=False)
     assert scores.shape == (2, 100) and scores.dtype == np.float64
@@ -304,7 +305,7 @@ def test_failed_preflight_never_times_or_plots_and_retains_checks(tmp_path, arti
     assert report['benchmark'] is None and report['latency_comparisons'] is None
 
 
-@pytest.mark.parametrize('damage', ['score', 'recall', 'order', 'designated', 'timing', 'identity'])
+@pytest.mark.parametrize('damage', ['score', 'recall', 'order', 'designated', 'timing', 'identity', 'prefix'])
 def test_saved_evidence_corruption_rejected_even_with_rehashed_files(tmp_path, artifact, damage):
     path, report = bench.run_comparison(tmp_path, artifact[0], 100)
     filename = 'report.json'
@@ -317,6 +318,7 @@ def test_saved_evidence_corruption_rejected_even_with_rehashed_files(tmp_path, a
         if damage == 'designated': report['benchmark']['designated']['hnsw']['10'].reverse()
         if damage == 'timing': report['benchmark']['raw_timings']['hnsw'][0]['query_position'] = 9
         if damage == 'identity': report['benchmark']['measured_results'][0]['check']['native_results'][0]['index_position'] = 99
+        if damage == 'prefix': report['selection_metadata']['prefix_identity_sha256']['100'] = 'wrong'
         (path/filename).write_text(json.dumps(report))
     with pytest.raises(ValueError, match='checksum'):
         bench.load_comparison_run(path)

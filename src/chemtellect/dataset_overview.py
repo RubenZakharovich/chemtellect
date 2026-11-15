@@ -12,6 +12,9 @@ from chemtellect.molecular_validation import validate_molecules
 
 SOURCES = ('chemicalspace_new', 'otava_chemical')
 PACKAGES = ('package_00', 'package_01', 'package_02', 'scale_10k_00', 'scale_100k_00')
+APPROVED_DATASETS = {(s, p) for s in SOURCES for p in PACKAGES
+                     if (s, p) != ('otava_chemical', 'scale_10k_00')}
+APPROVED_DATASETS.add(('chemicalspace_new', 'scale_1m_00'))
 POLICY = {'canonical': True, 'isomericSmiles': True, 'sanitize': True, 'standardization': 'none'}
 COUNTS = ('total_input_records', 'successfully_parsed_records', 'invalid_molecular_records',
           'integrity_rejected_records', 'unique_canonical_structures',
@@ -28,7 +31,7 @@ class Dataset:
 
 
 def dataset(root: Path, source: str, package: str) -> Dataset:
-    if source not in SOURCES or package not in PACKAGES or (source == 'otava_chemical' and package == 'scale_10k_00'):
+    if (source, package) not in APPROVED_DATASETS:
         raise ValueError('Not an approved completed dataset')
     base = Path(root) / 'data/raw' / source
     return Dataset(source, package, base / f'{package}_pool.jsonl',

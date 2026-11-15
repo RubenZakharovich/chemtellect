@@ -26,9 +26,31 @@ PAYLOADS = ('exact_scores.npy', 'records.json', 'top_k.json', 'timings.json', 's
 def validate_scores(scores, shape):
     """The authoritative representation is float64; no coercion or tolerance."""
     if (not isinstance(scores, np.ndarray) or scores.dtype != np.float64
-            or scores.shape != tuple(shape) or not np.isfinite(scores).all()
-            or np.any(scores < 0) or np.any(scores > 1)):
+            or scores.shape != tuple(shape)):
         raise ValueError('Expected finite float64 scores of the required shape in [0, 1]')
+    # Bound temporary boolean arrays even when scores is a large memory map.
+    rows = (scores,) if scores.ndim == 1 else scores
+    for row in rows:
+        if not np.isfinite(row).all() or np.any(row < 0) or np.any(row > 1):
+            raise ValueError('Expected finite float64 scores of the required shape in [0, 1]')
+
+
+def write_reference(path, queries, index):
+    """Fresh RDKit float64 .npy, one Python score list at a time; no timed lookup."""
+    path = Path(path)
+    with path.open('xb'):
+        pass
+    scores = np.lib.format.open_memmap(path, mode='w+', dtype=np.float64,
+                                     shape=(len(queries), len(index)))
+    for q, query in enumerate(queries):
+        scores[q] = DataStructs.BulkTanimotoSimilarity(query, index)
+        validate_scores(scores[q], (len(index),))
+    scores.flush()
+    restored = np.load(path, mmap_mode='r', allow_pickle=False)
+    validate_scores(restored, scores.shape)
+    if any(not np.array_equal(a, b) for a, b in zip(scores, restored)):
+        raise ValueError('Fresh authoritative matrix round trip differs')
+    return restored
 
 
 def _validate_k(k, count):

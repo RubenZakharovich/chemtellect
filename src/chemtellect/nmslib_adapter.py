@@ -17,6 +17,7 @@ from chemtellect.fingerprints import (validate_packed, validate_nonzero_fingerpr
 ATOL = 1e-6
 RTOL = 0
 SERIALIZATION = '2048 space-separated 0/1 tokens; token i is RDKit bit i; packed bytes unpacked little'
+BYTE_TOKENS = tuple(' '.join(str((value >> bit) & 1) for bit in range(8)) for value in range(256))
 BACKEND = {'space': 'bit_jaccard', 'data_type': 'OBJECT_AS_STRING',
            'dtype': 'FLOAT', 'method': 'hnsw (initialization only; no graph)'}
 
@@ -24,7 +25,8 @@ BACKEND = {'space': 'bit_jaccard', 'data_type': 'OBJECT_AS_STRING',
 def to_nmslib_strings(rows):
     """Preserve row/bit order, including zeros; empty (0,256) returns []. No writes."""
     validate_packed(rows)
-    return [' '.join(map(str, np.unpackbits(row, bitorder='little'))) for row in rows]
+    # Identical text, avoiding 2048 NumPy scalar-to-string conversions per row.
+    return [' '.join(BYTE_TOKENS[value] for value in row.tobytes()) for row in rows]
 
 
 def register_rows(rows, ids):
@@ -43,11 +45,11 @@ def register_rows(rows, ids):
     ids = [int(i) for i in ids]
     if len(set(ids)) != len(ids):
         raise ValueError('Duplicate registration IDs')
-    strings = to_nmslib_strings(rows)
     registry = nmslib.init(space='bit_jaccard', data_type=nmslib.DataType.OBJECT_AS_STRING,
                           dtype=nmslib.DistType.FLOAT, method='hnsw')
-    positions = {identifier: registry.addDataPoint(identifier, value)
-                 for identifier, value in zip(ids, strings)}
+    # addDataPoint parses/copies synchronously; retain only one encoded row.
+    positions = {identifier: registry.addDataPoint(identifier, to_nmslib_strings(rows[p:p+1])[0])
+                 for p, identifier in enumerate(ids)}
     return registry, positions
 
 

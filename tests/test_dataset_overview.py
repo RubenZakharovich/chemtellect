@@ -93,7 +93,8 @@ def test_inventory_only_approved_completed_names(tmp_path):
     fixture_pool(tmp_path)
     rows = inventory(tmp_path)
     assert len(rows) == 9 and sum(r['raw_present'] for r in rows) == 1
-    with pytest.raises(ValueError): dataset(tmp_path, 'chemicalspace_new', 'scale_1m_00')
+    assert dataset(tmp_path, 'chemicalspace_new', 'scale_1m_00').package == 'scale_1m_00'
+    with pytest.raises(ValueError): dataset(tmp_path, 'otava_chemical', 'scale_1m_00')
     with pytest.raises(ValueError): dataset(tmp_path, 'otava_chemical', 'archive/package_00')
 
 

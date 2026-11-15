@@ -78,7 +78,8 @@ def unpack_fingerprints(packed):
     if packed.dtype != np.uint8 or packed.ndim != 2 or packed.shape[1] != 256:
         raise ValueError('Expected uint8 (n, 256) array')
     # One row at a time avoids a full unpacked 100K array.
-    return [DataStructs.CreateFromBitString(''.join(map(str, np.unpackbits(row, bitorder='little')))) for row in packed]
+    # RDKit's binary text uses the same little-bit-order bytes as this store.
+    return [DataStructs.CreateFromBinaryText(row.tobytes()) for row in packed]
 
 
 def mapping(split):
@@ -126,7 +127,7 @@ def verify_artifact(directory, split_path, config, root):
     if json.loads((directory/'records.json').read_text()) != mapping(split):
         raise ValueError('Ordered record mapping mismatch')
     for role, count in [('queries',split['query_count']),('index',max(split['index_sizes']))]:
-        array = np.load(directory/f'{role}.npy', allow_pickle=False)
+        array = np.load(directory/f'{role}.npy', allow_pickle=False, mmap_mode='r')
         if array.dtype != np.uint8 or array.shape != (count,256) or manifest['dimensions'][role] != [count,256]:
             raise ValueError(f'Invalid array shape/dtype: {role}')
         arrays[role] = array

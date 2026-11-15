@@ -48,8 +48,11 @@ def packed_to_native(packed, ids):
     """Native process_fp: ID, 32 words in bit-string order, enabled-bit count."""
     validate_packed(packed)
     ids = validate_ids(ids, len(packed))
-    vectors = store.unpack_fingerprints(packed)
-    return np.asarray([process_fp(fp, i) for fp, i in zip(vectors, ids)], dtype=np.uint64).reshape(-1, 34)
+    result = np.empty((len(packed), 34), dtype=np.uint64)
+    for start in range(0, len(packed), 1000):
+        vectors = store.unpack_fingerprints(packed[start:start+1000])
+        result[start:start+len(vectors)] = [process_fp(fp, i) for fp, i in zip(vectors, ids[start:start+1000])]
+    return result
 
 
 def native_to_packed(rows):
@@ -88,7 +91,9 @@ def prepare_backend(path, queries, index, config, ids=None):
     t = perf_counter_ns()
     query_rows = packed_to_native(queries, range(len(queries)))
     query_conversion_ns = perf_counter_ns()-t
-    if not np.array_equal(native_to_packed(db), index) or not np.array_equal(native_to_packed(query_rows), queries):
+    if (any(not np.array_equal(native_to_packed(db[s:s+1000]), index[s:s+1000])
+            for s in range(0, len(index), 1000))
+            or not np.array_equal(native_to_packed(query_rows), queries)):
         raise ValueError('Native conversion round trip differs from saved bits')
     path = Path(path)
     # Reserve the name before PyTables opens it. Never replace any existing file.
@@ -96,7 +101,8 @@ def prepare_backend(path, queries, index, config, ids=None):
         pass
     with tables.open_file(path, mode='w') as out:
         table = out.create_table('/', 'fps', create_schema(2048))
-        table.append([tuple(int(v) for v in row) for row in db])
+        for start in range(0, len(db), 1000):
+            table.append([tuple(int(v) for v in row) for row in db[start:start+1000]])
         cfg = out.create_vlarray('/', 'config', atom=tables.ObjectAtom())
         for item in ('Morgan', config['generator'], rdBase.rdkitVersion, SUPPORTED_VERSION, []):
             cfg.append(item)
@@ -107,7 +113,8 @@ def prepare_backend(path, queries, index, config, ids=None):
     if set(loaded_ids) != set(ids):
         raise ValueError('Native loader changed search identities')
     original_positions = [id_to_position[i] for i in loaded_ids]
-    if not np.array_equal(native_to_packed(engine.fps), index[original_positions]):
+    if any(not np.array_equal(native_to_packed(engine.fps[s:s+1000]), index[original_positions[s:s+1000]])
+           for s in range(0, len(index), 1000)):
         raise ValueError('Loaded/sorted backend rows differ from saved bits')
     if np.any(np.diff(engine.fps[:, -1].astype(np.int64)) < 0):
         raise ValueError('FPSim2 index is not population-count sorted')

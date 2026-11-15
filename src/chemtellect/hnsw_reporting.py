@@ -108,14 +108,52 @@ def write_charts(directory, report):
     return names
 
 
+def verify_parent_series(reports):
+    """Reject mixed parents/configurations and reordered or unregistered prefixes.
+
+    Schema 1 has identity through its verified split/artifact linkage. Schema 2
+    additionally carries ordered query and prefix digests checked by the loader.
+    """
+    if not reports or not all(r['passed'] for r in reports):
+        raise ValueError('Parent series requires successful runs')
+    first = reports[0]
+    sizes = [r['index_size'] for r in reports]
+    if sizes != sorted(set(sizes)):
+        raise ValueError('Parent sizes must be strictly increasing')
+    for r in reports:
+        if (any(r[k] != first[k] for k in ('source', 'package', 'query_count', 'configuration', 'fingerprint_identity'))
+                or any(r['linkage'][k] != first['linkage'][k] for k in
+                       ('split_id', 'artifact_id', 'raw_sha256_inherited', 'split_file_sha256'))
+                or r.get('settings') != first.get('settings')):
+            raise ValueError('Cross-parent or configuration mismatch')
+    if any('selection_metadata' in r for r in reports):
+        if not all('selection_metadata' in r for r in reports):
+            raise ValueError('Mixed selection metadata versions')
+        largest = reports[-1]['selection_metadata']
+        for r in reports:
+            m = r['selection_metadata']
+            if (m['query_identity_sha256'] != largest['query_identity_sha256']
+                    or m['index_sizes'] != largest['index_sizes']
+                    or r['index_size'] not in m['index_sizes']
+                    or set(m['prefix_identity_sha256']) != {str(n) for n in m['index_sizes'] if n <= r['index_size']}
+                    or any(largest['prefix_identity_sha256'].get(k) != v for k, v in m['prefix_identity_sha256'].items())):
+                raise ValueError('Query identities or nested prefix ordering mismatch')
+    return reports
+
+
 def write_overview(directory, reports):
     """Presentation-only views of the four completed runs, keeping experiments separate."""
     from matplotlib.lines import Line2D
 
     expected = [('package_00', 1000), ('scale_100k_00', 1000),
                 ('scale_100k_00', 10000), ('scale_100k_00', 100000)]
-    if [(r['package'], r['index_size']) for r in reports] != expected or not all(r['passed'] for r in reports):
-        raise ValueError('Overview requires the four explicit successful authorized runs in order')
+    historical = [(r['package'], r['index_size']) for r in reports] == expected
+    parent = reports[1:] if historical else reports
+    verify_parent_series(parent)
+    if len(reports) != 4:
+        raise ValueError('Overview requires old pilot plus parent, or a verified four-size parent')
+    if not all(r['passed'] for r in reports):
+        raise ValueError('Overview requires successful runs')
     colors = dict(zip(BACKENDS, ('#386cb0', '#ef8a32', '#389343')))
     markers = {10: 'o', 25: 's', 50: '^', 100: 'D'}
     figures = []
@@ -139,19 +177,22 @@ def write_overview(directory, reports):
     for ax, k in zip(axes, (10, 100)):
         for b in BACKENDS:
             points = [(r['index_size'], next(v['median']/1000 for v in r['latency_comparisons']
-                       if v['backend'] == b and v['k'] == k)) for r in reports[1:]]
+                       if v['backend'] == b and v['k'] == k)) for r in parent]
             ax.plot([n for n, _ in points], [v for _, v in points], color=colors[b], marker='o', label=b)
         ax.set(title=f'Nested parent only / k={k}', xscale='log', xlabel='Measured index rows (log scale)',
-               ylabel='Median of per-query median latency (µs)', ylim=(0, None), xticks=[1000, 10000, 100000])
-        ax.set_xticklabels(['1K', '10K', '100K']); ax.grid(alpha=.25); ax.legend()
+               ylabel='Median of per-query median latency (µs)', ylim=(0, None), xticks=[r['index_size'] for r in parent])
+        ax.set_xticklabels([f"{r['index_size']:,}" for r in parent]); ax.grid(alpha=.25); ax.legend()
     fig.suptitle('Observed parent scaling points; fresh independent graphs, no extrapolation')
     figures.append(('parent_latency_scaling', fig))
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.3), layout='constrained')
-    for ax, group, title in [(axes[0], reports[:1], 'Independent 1K pilot'),
-                              (axes[1], reports[1:], 'Nested parent; fresh graph at each size')]:
+    groups = [(reports[:1], 'Independent 1K pilot'), (parent, 'Nested parent; fresh graph at each size')] if historical else [
+        (parent, 'Nested parent; fresh graph at each size'), (parent, 'Fresh reference costs')]
+    for panel, (ax, (group, title)) in enumerate(zip(axes, groups)):
         ax.bar([f"{r['index_size']:,}" for r in group],
-               [r['hnsw_preparation']['graph_construction_ns']/1e9 for r in group], color='#389343')
-        ax.set(title=title, xlabel='Index rows', ylabel='Single HNSW graph construction (s)', ylim=(0, None))
+               [(r['timings_ns']['fresh_exhaustive_reference_computation_and_validation'] if not historical and panel == 1
+                 else r['hnsw_preparation']['graph_construction_ns'])/1e9 for r in group], color='#389343')
+        ax.set(title=title, xlabel='Index rows', ylabel=('Fresh reference (s)' if not historical and panel == 1
+                                                     else 'Single HNSW graph construction (s)'), ylim=(0, None))
         ax.grid(axis='y', alpha=.25)
     figures.append(('graph_construction_costs', fig))
     names = []

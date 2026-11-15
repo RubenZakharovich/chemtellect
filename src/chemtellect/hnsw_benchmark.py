@@ -238,10 +238,22 @@ def _restore_check(check, backend, reference, mapping, records):
 
 
 def _validate_payloads(path, report):
+    if report.get('schema_version') not in (1, 2):
+        raise ValueError('Unsupported comparison report schema')
     records = json.loads((path/'records.json').read_text())
     if records['linkage'] != report['linkage']:
         raise ValueError('Saved ordered identity linkage mismatch')
     link = report['linkage']
+    if report.get('schema_version') == 2:
+        selection = report['selection_metadata']
+        expected_prefixes = {str(n): store.digest(records['index'][:n])
+                             for n in selection['index_sizes'] if n <= report['index_size']}
+        if (selection['query_identity_sha256'] != store.digest(records['queries'])
+                or selection['prefix_identity_sha256'] != expected_prefixes
+                or report['index_size'] not in selection['index_sizes']
+                or report['experiment'] != ('nested parent scaling' if len(selection['index_sizes']) > 1
+                                            else 'independent pilot')):
+            raise ValueError('Saved selection metadata differs from ordered identities')
     validate_configuration(report['fingerprint_identity']['configuration'])
     if (store.digest(report['fingerprint_identity']) != link['artifact_id']
             or report['fingerprint_identity']['split_id'] != link['split_id']
@@ -257,7 +269,7 @@ def _validate_payloads(path, report):
         if report['passed']:
             raise ValueError('Completed run lacks authoritative matrix')
         return
-    scores = np.load(path/'exact_scores.npy', allow_pickle=False)
+    scores = np.load(path/'exact_scores.npy', allow_pickle=False, mmap_mode='r')
     exact.validate_scores(scores, (report['query_count'], report['index_size']))
     if not (path/'ground_truth_top_k.json').exists() and not report['passed']:
         return
@@ -362,17 +374,24 @@ def load_comparison_run(path, root=None):
                 or store.file_info(root/link['artifact_path']/'manifest.json') != link['artifact_manifest']
                 or verify_raw(root, manifest) != report['raw_verification']):
             raise ValueError('Current raw/artifact linkage differs from saved run')
+        if report.get('schema_version') == 2 and report['selection_metadata']['index_sizes'] != manifest['index_sizes']:
+            raise ValueError('Saved registered sizes differ from verified split')
         saved_records = json.loads((path/'records.json').read_text())
         if any(saved_records[key] != records[key] for key in records):
             raise ValueError('Current ordered identities differ from saved run')
     return report
 
 
-def run_comparison(root, artifact_path, index_size, *, expected_selection=None, report_writer=None):
+def run_comparison(root, artifact_path, index_size, *, expected_selection=None, report_writer=None, progress=None):
     """Verify raw/split/artifact, guard all rows, score afresh, build once, gate and time."""
     root, artifact_path = Path(root).resolve(), Path(artifact_path).resolve()
     started = store.utc()
     snapshots = [memory_snapshot('before_loading')]
+    def observe(stage):
+        snapshot = memory_snapshot(stage)
+        snapshots.append(snapshot)
+        if progress is not None:
+            progress(snapshot)
     manifest, queries, index, records, timings = exact.load_selection(root, artifact_path, index_size)
     selected = {key: manifest[key] for key in ('source', 'package', 'query_count')}
     selected['index_size'] = index_size
@@ -392,9 +411,14 @@ def run_comparison(root, artifact_path, index_size, *, expected_selection=None, 
     parent.mkdir(parents=True, exist_ok=True)
     final = parent/f'run_{run_id}'
     staging = Path(tempfile.mkdtemp(prefix=f'.run_{run_id}.staging-', dir=parent))
-    report = {'schema_version': 1, 'run_id': run_id, 'started_utc': started, 'passed': False,
+    selection_metadata = {'index_sizes': manifest['index_sizes'],
+        'query_identity_sha256': store.digest(records['queries']),
+        'prefix_identity_sha256': {str(n): store.digest(records['index'][:n])
+                                  for n in manifest['index_sizes'] if n <= index_size}}
+    report = {'schema_version': 2, 'run_id': run_id, 'started_utc': started, 'passed': False,
         **selected, 'linkage': link, 'raw_verification': raw_verification,
-        'experiment': 'nested parent scaling' if manifest['package'] == 'scale_100k_00' else 'independent pilot',
+        'experiment': 'nested parent scaling' if len(manifest['index_sizes']) > 1 else 'independent pilot',
+        'selection_metadata': selection_metadata,
         'fingerprint_identity': manifest['identity'], 'configuration': hnsw.CONFIGURATION,
         'environment': {**store.environment(root), **fpsim2.versions(),
                         **{name: version(name) for name in ('matplotlib', 'pandas', 'threadpoolctl')},
@@ -435,31 +459,30 @@ def run_comparison(root, artifact_path, index_size, *, expected_selection=None, 
             'graph_construction_ns': 'one createIndex call; excludes encoding, registration and graph saving',
             'validation_and_result_assembly_ns': 'outside-timer per-response checks, row agreement, evidence assembly',
             'report_serialization_writing_ns': 'stored in manifest; excludes plotting, checksums and publication'}}
+    report['reference_storage'] = {'format': 'float64 npy memory map', 'construction': 'one fresh RDKit score row at a time',
+        'fresh_exhaustive_reference_computation_and_validation': 'includes mmap writing, flush and row-wise round trip',
+        'reference_persistence_and_top_k_evidence': 'top-k evidence only; matrix writing is in reference construction',
+        'reuse': False}
     store.write_json(staging/'records.json', {**records, 'linkage': link})
     store.write_json(staging/'configuration.json', hnsw.CONFIGURATION)
     try:
         t = perf_counter_ns()
         report['nonzero_validation'] = validate_nonzero_fingerprints(queries, index, records)
         timings['selected_nonzero_validation'] = perf_counter_ns()-t
-        snapshots.append(memory_snapshot('verified_and_guarded_inputs'))
+        observe('verified_and_guarded_inputs')
         t = perf_counter_ns(); qv = store.unpack_fingerprints(queries)
         timings['rdkit_query_reconstruction'] = perf_counter_ns()-t
         t = perf_counter_ns(); iv = store.unpack_fingerprints(index)
         timings['rdkit_index_reconstruction'] = perf_counter_ns()-t
         t = perf_counter_ns()
-        reference = np.asarray([DataStructs.BulkTanimotoSimilarity(q, iv) for q in qv], dtype=np.float64)
-        exact.validate_scores(reference, (len(queries), len(index)))
+        reference = exact.write_reference(staging/'exact_scores.npy', qv, iv)
         timings['fresh_exhaustive_reference_computation_and_validation'] = perf_counter_ns()-t
         t = perf_counter_ns()
-        with (staging/'exact_scores.npy').open('xb') as stream:
-            np.save(stream, reference, allow_pickle=False)
-        if not np.array_equal(reference, np.load(staging/'exact_scores.npy', allow_pickle=False)):
-            raise ValueError('Fresh authoritative matrix round trip differs')
         truth = exact._results({'scores': reference, 'positions': {
             str(k): [exact.exact_top_k(row, k).tolist() for row in reference] for k in exact.CANDIDATE_COUNTS}}, records)
         store.write_json(staging/'ground_truth_top_k.json', truth)
         timings['reference_persistence_and_top_k_evidence'] = perf_counter_ns()-t
-        snapshots.append(memory_snapshot('rdkit_and_fresh_reference_prepared'))
+        observe('rdkit_and_fresh_reference_prepared')
         t = perf_counter_ns()
         report['synthetic'] = hnsw.verify_synthetic()
         report['fpsim2_synthetic'] = paired.verify_synthetic(staging/'synthetic_fpsim2.h5')
@@ -470,9 +493,9 @@ def run_comparison(root, artifact_path, index_size, *, expected_selection=None, 
         fps_engine, fpq, fmap, report['fpsim2_representation'] = fpsim2.prepare_backend(
             staging/'index_fpsim2.h5', queries, index, manifest['configuration'])
         timings['fpsim2_conversion_database_loading_and_verification'] = perf_counter_ns()-t
-        snapshots.append(memory_snapshot('fpsim2_prepared'))
+        observe('fpsim2_prepared')
         hns_engine, hnq, hmap, report['hnsw_preparation'] = hnsw.prepare_backend(queries, index)
-        snapshots.append(memory_snapshot('fresh_hnsw_graph_built'))
+        observe('fresh_hnsw_graph_built')
         t = perf_counter_ns()
         with (staging/'prepared_queries_fpsim2.npy').open('xb') as stream:
             np.save(stream, fpq, allow_pickle=False)
@@ -501,7 +524,7 @@ def run_comparison(root, artifact_path, index_size, *, expected_selection=None, 
         if isinstance(error, NonzeroFingerprintError):
             report['nonzero_validation'] = {'passed': False, 'summary': error.summary,
                                            'affected_records': error.affected_records}
-    snapshots.append(memory_snapshot('after_gate_and_optional_comparative_passes'))
+    observe('after_gate_and_optional_comparative_passes')
     if report['passed'] and report_writer is not None:
         t = perf_counter_ns()
         report['charts'] = report_writer(staging, report)
