@@ -34,22 +34,22 @@ $G_\tau(q)=\{x\in D:T(q,x)\geq\tau\}$
 where $T(q,x)$ is the similarity function.
 
 The HNSW candidate set is
-$$C_k(q)=\operatorname{HNSW}(q,k)$$
+$C_k(q)=\operatorname{HNSW}(q,k)$
 
 where $k$ is the number of candidates requested.
 
 ### Threshold recall evaluation metric
 
-$${ R_\tau(q)= \frac{|C_k(q)\cap G_\tau(q)|} {|G_\tau(q)|} }$$
+${ R_\tau(q)= \frac{|C_k(q)\cap G_\tau(q)|} {|G_\tau(q)|} }$
 For a nonempty ground-truth set and a budget of $k$ candidates the maximum attainable threshold recall is 
-$${R_\tau^{\max}(q)=\min\left(1,\frac{k}{|G_\tau(q)|}\right)}$$
+${R_\tau^{\max}(q)=\min\left(1,\frac{k}{|G_\tau(q)|}\right)}$
 
 This is recall at similarity threshold $\tau$, or the proportion of truly qualifying molecules retrieved by HNSW.
 
 ### Top-$k$ recall evaluation metric
 Let $E_k(q)$ be the set of the $k$ most similar molecules according to exhaustive Tanimoto search, and $C_k(q)$ the $k$ candidates returned by HNSW. Then top-$k$ recall is
 
-$${R@k(q)=\frac{|E_k(q)\cap C_k(q)|}{k}}$$
+${R@k(q)=\frac{|E_k(q)\cap C_k(q)|}{k}}$
 
 This measures how much the two sets overlap, not their internal ordering. When several molecules tie at the exact $k^{th}$ similarity score, we'll use a tie-aware version to avoid penalizing equally good alternatives.
 
@@ -62,9 +62,9 @@ Tanimoto similarities often tie, especially with fixed-length fingerprints. If s
 
 Let $s_k$ be the $k^{th}$-largest exact score, $H = \{x \in D : T(q,x) > s_k\}$ and 
 $B = \{x \in D : T(q,x) = s_k\}$. Then the number of acceptable hits is:
-$$h_{\mathrm{tie}}=|C_k\cap H|+\min(k-|H|,\ |C_k\cap B|)$$
+$h_{\mathrm{tie}}=|C_k\cap H|+\min(k-|H|,\ |C_k\cap B|)$
 and 
-$$\operatorname{TieAwareRecall}@k(q) = \frac{h_{\mathrm{tie}}(q)}{k}$$
+$\operatorname{TieAwareRecall}@k(q) = \frac{h_{\mathrm{tie}}(q)}{k}$
 
 This rewards all exact neighbors strictly above the cutoff and allows 
 any $k - |H|$ equally scoring records at the boundary to fill the remaining positions. Use this as the primary top-k metric, optionally report raw ID-overlap recall as supplemental. Use exactly the computed similarity scores rather than an arbitrary rounding rule for tie determination, or document a consistent tolerance if floating-point representations require one.
@@ -85,12 +85,12 @@ For this evaluation the binary Morgan fingerprints and Tanimoto similarity is ch
 
 For binary fingerprints, Tanimoto similarity is
 
-$$T(A,B)= \frac{|A\cap B|}{|A\cup B|}$$
+$T(A,B)= \frac{|A\cap B|}{|A\cup B|}$
 
 where $A$ and $B$ represent the sets of active fingerprint bits.
 
 The corresponding Jaccard distance is
-$$\boxed{d_J(A,B)=1-T(A,B)}$$
+$\boxed{d_J(A,B)=1-T(A,B)}$
 
 Minimizing Jaccard distance is exactly equivalent to maximizing binary Tanimoto similarity.
 
@@ -210,7 +210,7 @@ It does not remove every structure with the same fingerprint. Records 17 and 42 
 
 Their Tanimoto similarity to Q is:
 
-$$T(Q,17)=T(Q,42)=\frac{4\text{ shared set bits}}{4\text{ bits in the union}}=1$$
+$T(Q,17)=T(Q,42)=\frac{4\text{ shared set bits}}{4\text{ bits in the union}}=1$
 
 Thus, similarity 1 means identical fingerprints—not necessarily identical molecules.
 ##### What does “each retains its own matrix column” mean?
@@ -224,7 +224,7 @@ The similarity matrix stores a score for every indexed record, including records
 The code does not combine columns 17 and 42 into one column. They correspond to two distinct searchable records.
 
 For any other query X, records 17 and 42 will also receive equal scores:
-$$T(X,17)=T(X,42)$$
+$T(X,17)=T(X,42)$
 because the similarity calculation sees exactly the same bits for both records. Those scores need not be 1; they simply must equal each other.
 
 ##### How does this affect the returned results?**
@@ -242,7 +242,7 @@ For the example above:
 For top-1, the tie-aware rule accepts either 17 or 42. It does not penalize HNSW merely because RDKit’s saved, deterministically ordered answer chose the other ID.
 
 For top-2, both 17 and 42 belong in the answer. Returning 17 and 63 earns:
-$$R_2=\frac{1}{2}=50\%$$
+$R_2=\frac{1}{2}=50\%$
 ##### Does every equal-score tie indicate a fingerprint collision?**
 
 No. Different fingerprints can also have the same Tanimoto score against a particular query.
@@ -255,14 +255,14 @@ The practical consequence is that this experiment retrieves molecular records, a
 
 For fingerprints A and B, bit-vector Tanimoto similarity is:
 
-$$
+$
 T(A,B)=\frac{|A\cap B|}{|A\cup B|}.
-$$
+$
 Before comparative timing, RDKit compares every query with every indexed fingerprint. For query q and indexed record i, it saves:
 
-$$
+$
 S_{q,i}=T(q,i).
-$$
+$
 
 Each matrix row contains one query's scores against the entire index; each column refers to one indexed record. A small illustrative matrix might be:
 
@@ -304,9 +304,9 @@ HNSW must return exactly k distinct, valid IDs and finite distances between 0 an
 ##### Top-k recall
 Recall that the default policy for [[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Top-$k$ recall evaluation metric|Top-k recall]] used is the [[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Definitions#Tie-aware top-k recall|Tie-aware recall]] which asks: How many of the best k neighbors did the method recover?
 
-$$
+$
 R_k(q)=\frac{|C_k\cap H|+\min(k-|H|,\ |C_k\cap B|)}{k}
-$$
+$
 Ties use direct `float64` equality, with no epsilon. Meaning, we consider scores tied only when their saved `float64` values compare exactly equal. Epsilon would be a small allowance used to treat nearby values as equal.
 
 Saved exact top-k lists break ties by original index position. Meaning, the code orders molecules by:
@@ -318,9 +318,9 @@ Example:  If a list of three records should be retrieved from the set $\{A,B,C,D
 
 Mean recall is the arithmetic average of the per-query recalls:
 
-$$
+$
 \overline{R}_k=\frac{1}{Q}\sum_{q=1}^{Q}R_k(q).
-$$
+$
 where $Q$ is the number of queries.
 
 For example, recalls of $100\%$, $90\%$, and $80\%$ average to $90\%$. This does not mean each query achieves $90\%$. The report also shows median and minimum recall to expose some variation between queries. Recall evaluates membership, not the internal ordering of results.
@@ -329,18 +329,18 @@ For example, recalls of $100\%$, $90\%$, and $80\%$ average to $90\%$. This does
 
 [[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Threshold recall evaluation metric|Threshold recall]] asks: Of all indexed molecules scoring at least $τ$, how many appeared in the returned top-k set? For $τ$ in $\{0.3, 0.5, 0.7, 0.9\}$:
 
-$$
+$
 G_\tau(q)=\{i:S_{q,i}\ge\tau\},\qquad
 R_{\tau,k}(q)=\frac{|C_k(q)\cap G_\tau(q)|}{|G_\tau(q)|}.
-$$
+$
 
 Comparison is inclusive (`>=`) against the float64 threshold, with no tolerance. Every threshold uses the same designated candidate set; there is no additional retrieval for each threshold.
 
 If $200$ molecules qualify but $k = 10$, even perfect top-$10$ retrieval reaches at most $5\%$ threshold recall. The capacity ceiling is:
 
-$$
+$
 R_{\tau,k}^{\max}(q)=\min\left(1,\frac{k}{|G_\tau(q)|}\right).
-$$
+$
 
 ### Search repetitions and timing boundaries
 
@@ -379,15 +379,15 @@ Fingerprint generation, query preparation, index preparation, graph construction
 ### From repeated timings to headline speed
 First take the median of five measured times for each single query:
 
-$$
+$
 m_q=\operatorname{median}(t_{q,1},\ldots,t_{q,5}).
-$$
+$
 
 Then take the median of those 100 per-query medians:
 
-$$
+$
 L=\operatorname{median}(m_1,\ldots,m_{100}).
-$$
+$
 
 This L is the headline latency: the typical query's typical time. For example, five times of 1.30, 1.34, 1.31, 2.10, and 1.33 ms yield a per-query median of 1.33 ms.
 
@@ -407,10 +407,10 @@ It does not describe the slowest 5% of all individual requests. A query with fou
 
 For a baseline B and method H:
 
-$$
+$
 \text{speedup}=L_B/L_H,\qquad
 \text{time saved}=L_B-L_H.
-$$
+$
 
 A speedup above 1 favors H; below 1 favors B. This is a ratio of aggregate latencies, not a mean of individual query speedups.
 
