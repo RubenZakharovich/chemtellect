@@ -1,303 +1,417 @@
-# Chemtellect
+# Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval
 
-The reusable local raw-to-results workflow and unattended execution commands are
-documented in [docs/dataset_pipeline.md](docs/dataset_pipeline.md). Its single
-parameterized notebook is [07_dataset_pipeline.ipynb](notebooks/07_dataset_pipeline.ipynb).
+Objective: Evaluating recall and computational efficiency of HNSW-based approximate molecular retrieval against exhaustive fingerprint similarity search, using different similarity thresholds and candidate counts.
 
-Experimental molecular retrieval with binary Morgan fingerprints.
+Given a dataset of $N$ molecules and a fingerprint representation for each molecule. For every query molecule $q$, we conduct two searches:
 
-## Molecular validation
+1. Compare the query fingerprint against every molecule in the dataset (exhaustive search).
+2. Use HNSW approximate search to retrieve a smaller candidate set.
 
-Run the independent RDKit diagnostic stage with:
+This is performed against a small representative dataset (a random sample) as it makes exhaustive search computationally affordable.
 
-```bash
-uv run python scripts/validate_molecules.py \
-  data/raw/otava_chemical/package_00_pool.jsonl \
-  --report experiments/results/validation/otava_chemical_package_00.json \
-  --min-unique 1100
-uv run pytest tests/test_molecular_validation.py
-```
+Finalize by comparing the retrieved sets. 
 
-The reusable API is `chemtellect.molecular_validation.validate_molecules(Path(...),
-min_unique=1100)`. Reporting is separate: `format_summary(report)` and
-`write_report(report, Path(...))`.
+*For a chosen similarity threshold, how many of the molecules found by exhaustive search were recovered through HNSW?*
 
-Each physical line counts as an input record, including blank lines. Malformed
-JSON/UTF-8, non-object records, and missing/blank/non-string or repeated source
-IDs are **input-integrity errors**. Each such line is rejected once before
-chemical validation. IDs are compared exactly; the first occurrence reserves an
-ID even if its SMILES is invalid. Missing/blank/non-string SMILES, RDKit parsing
-or sanitization failures, and empty molecular graphs are **chemical findings**.
-All findings retain line numbers and available valid string IDs.
+>Hypothesis to test: Higher similarity thresholds may lead to better threshold recall because fewer molecules satisfy the threshold condition. the composition of the retrieved set also matters. In particular, changing an evaluation threshold does not change a previously obtained HNSW candidate set.
 
-Total input records = parsed molecular records + invalid molecular records +
-integrity-rejected records. Parsed records = unique canonical structures +
-surplus duplicate records. Duplicate-group record counts include every member;
-surplus counts exclude one member per group. The JSON report retains every
-duplicate source ID and every issue; terminal examples are bounded.
+*For a chosen number of $k$ nearest neighbors, how many of the $k$ most similar molecules identified by exhaustive search were also retrieved by HNSW?*
 
-Structures are equal only when their canonical isomeric SMILES match, using
-standard RDKit sanitization and explicit `canonical=True, isomericSmiles=True`.
-There is no tautomer normalization, salt stripping, charge neutralization, or
-invention of missing stereochemistry. Results depend on the recorded RDKit
-version. Raw data and source fingerprint fields are never changed or used.
-The checksum is computed from the same streamed bytes that are analyzed. Reports
-contain no timestamps and are deterministic for an unchanged input path, file,
-RDKit version, and acceptance setting. Structure groups and issues are retained
-in memory; the input file itself is streamed.
+Both questions above measure set overlap rather than the ordering of retrieved molecules.
 
-Exit codes: **0** means no integrity errors and the optional minimum passed;
-**1** means integrity errors or a failed minimum; **2** means usage or file/report
-I/O errors. Chemical findings and duplicates alone do not fail the process.
-The 1,100-structure threshold is specific to the initial benchmark; only the
-configurable `--min-unique` controls acceptance. Sampling has no fixed minimum.
-The proposed 1,000-index / 100-query split belongs to future experiment
-configuration. Reports are still written when integrity or acceptance checks fail.
+**Evaluation Criteria**:
+- *Explore how HNSW parameter settings affect retrieval.*
+- *Explore how retrieval quality varies with different similarity thresholds and candidate counts.*
+- *Measure performance: retrieval time, query latency, index construction time, memory consumption, and how these change as the dataset grows.*
 
-## Pilot data acquisition
+# Definitions
 
-`chemtellect.mongo_sampling` uses existing authorized SSH configuration and the
-legacy `mongo` executable; it installs nothing remotely. Preview locally first:
+The following two sets are constructed for the experiment:
 
-```bash
-uv run python scripts/sample_mongo.py --ssh-target chemtellect-server \
-  --database otava_chemical --collection compounds --package package_01 --dry-run
-```
+The ground-truth set for threshold $\tau$ in indexed reference records $D$ is
+$$G_\tau(q)=\{x\in D:T(q,x)\geq\tau\}$$
 
-To acquire, execute the same command without `--dry-run`. The SSH alias is a
-placeholder for your authorized configuration. No credentials or SSH target are
-stored in manifests. Parameters include `--size` (default 1200, any positive
-integer), `--server-timeout-ms` (30000), `--client-timeout` (120 seconds), and
-`--raw-root` (`data/raw`). Samples above 10000 records require
-`--allow-large-sample`. `--max-transfer-bytes` defaults to 100 MiB for combined
-stdout/stderr; this is monitored periodically, so a brief overshoot is possible.
-Increasing either limit must be deliberate. Dry run validates and prints the
-command/destinations without creating files or making network requests.
+where $T(q,x)$ is the similarity function.
 
-The read-only aggregation starts with `$sample`, then projects only `_id`,
-`code`, `smiles`, `inchikey`, and `formula`. Missing or invalid SMILES are retained.
-New exports use the versioned `bson-id-v1` format recorded in each manifest:
-ObjectId becomes `objectid:<24 lowercase hex digits>`; a BSON string becomes
-`string:<JSON string literal>` (including quotes and JSON escapes). Other BSON
-ID types fail extraction explicitly. ObjectId and string IDs never collapse.
-Compare exact IDs only within the same database, collection, and encoding.
-The earlier sampler used shell-dependent `tojson(_id)` text; those IDs are also
-not directly comparable to this format.
+The HNSW candidate set is
+$$C_k(q)=\operatorname{HNSW}(q,k)$$
 
-The original `package_00_pool.jsonl` used `String(_id)`. That can lose BSON type
-information: an ObjectId and a string containing its hex text can coincide.
-Do not infer types from hex-looking text or compare it directly with new IDs.
-Cross-format overlap assessment requires independently verified original types;
-no automatic conversion or cross-package deduplication is performed.
-The original file and its identifiers remain unchanged.
+where $k$ is the number of candidates requested.
 
-Commands target legacy `mongo`, not `mongosh`: ObjectId `valueOf()` returns hex
-in the legacy shell ([MongoDB compatibility documentation](https://www.mongodb.com/docs/mongodb-shell/reference/compatibility/)).
-`--norc` suppresses the user's `.mongorc.js`, avoiding user startup code and output.
-It also bypasses authentication or connection setup kept there; use authorized
-SSH/server configuration instead. A system-wide shell startup file may still run;
-read-only credentials and trusted remote configuration remain necessary.
-Arguments are validated locally and the remote command is shell-quoted.
-No writes or automatic retries are issued by the sampling script.
+### Threshold recall evaluation metric
 
-Manual non-mutating connectivity check (not run during development):
+$${ R_\tau(q)= \frac{|C_k(q)\cap G_\tau(q)|} {|G_\tau(q)|} }$$
+For a nonempty ground-truth set and a budget of $k$ candidates the maximum attainable threshold recall is 
+$${R_\tau^{\max}(q)=\min\left(1,\frac{k}{|G_\tau(q)|}\right)}$$
 
-```bash
-ssh -T -o BatchMode=yes -- chemtellect-server \
-  'mongo --quiet --norc --eval "var r = db.getSiblingDB(\"admin\").runCommand({ping: 1}); if (r.ok !== 1) quit(1); print(\"ping ok\");"'
-```
+This is recall at similarity threshold $\tau$, or the proportion of truly qualifying molecules retrieved by HNSW.
 
-This uses the remote shell's default local MongoDB endpoint. Replace the SSH
-alias with your authorized host alias; confirm the intended remote configuration
-before any live extraction.
+### Top-$k$ recall evaluation metric
+Let $E_k(q)$ be the set of the $k$ most similar molecules according to exhaustive Tanimoto search, and $C_k(q)$ the $k$ candidates returned by HNSW. Then top-$k$ recall is
 
-Output pairs follow this pattern (both are excluded from Git):
+$${R@k(q)=\frac{|E_k(q)\cap C_k(q)|}{k}}$$
 
-```text
-data/raw/otava_chemical/package_01_pool.jsonl
-data/raw/otava_chemical/package_01_pool.meta.json
-data/raw/chemicalspace_new/package_00_pool.jsonl
-data/raw/chemicalspace_new/package_00_pool.meta.json
-```
+This measures how much the two sets overlap, not their internal ordering. When several molecules tie at the exact $k^{th}$ similarity score, we'll use a tie-aware version to avoid penalizing equally good alternatives.
 
-Schema version 1 manifests contain database, collection, package, method and
-limitations, requested/actual counts, UTC extraction start/completion times,
-SHA-256, output filename, retrieved fields, identity encoding, integrity status,
-missing-SMILES count, server/client timeouts and byte limit. Collection size and
-snapshot identifier are `null` (unknown). No metadata is added to individual
-records. The pre-existing `package_00_pool.jsonl` is left unchanged and receives
-no manufactured manifest.
+Example, if exact top-5 is `{A,B,C,D,E}` and HNSW returns `{A,B,C,F,G}`, `R@5 = 3/5 = 60%`.
 
-The method is `mongodb_sample_first_stage`: MongoDB normally uses its optimized
-pseudo-random cursor when `$sample` is first, the collection exceeds 100 records,
-and sample size is below 5% of the collection. Planner behavior is not verified
-by this utility. Selection bias is possible; these pilot samples are **not
-guaranteed uniform or statistically representative**, and do not justify
-unbiased population estimates. No collection-scan fallback is implemented.
-Independent packages may overlap and are not a frozen database snapshot.
-Representativeness, query distributions, composition and index-size effects
-require separate assessment.
+Neither top-k recall nor threshold recall measures the ordering of the returned records.
 
-Extraction streams to a hidden `.partial` file. Process success and exact count,
-JSON/UTF-8, object and unique nonblank string ID checks must pass before
-publication. `chemtellect.data_integrity.validate_jsonl(path, expected=...)`
-returns structured results and hashes the same bytes it checks, without RDKit.
-SMILES absence is a quality observation. The backward-compatible raw CLI remains
-strict unless explicitly permitted:
+### Tie-aware top-k recall
+Tanimoto similarities often tie, especially with fixed-length fingerprints. If several records tie at the exact $k^{th}$ score, an equally similar record chosen instead of the arbitrarily selected $k^{th}$ record should not be counted as an error.
 
-```bash
-uv run python scripts/validate_raw_sample.py \
-  data/raw/otava_chemical/package_01_pool.jsonl --expected 1200 --allow-missing-smiles
-```
+Let $s_k$ be the $k^{th}$-largest exact score, $H = \{x \in D : T(q,x) > s_k\}$ and 
+$B = \{x \in D : T(q,x) = s_k\}$. Then the number of acceptable hits is:
+$$h_{\mathrm{tie}}=|C_k\cap H|+\min(k-|H|,\ |C_k\cap B|)$$
+and 
+$$\operatorname{TieAwareRecall}@k(q) = \frac{h_{\mathrm{tie}}(q)}{k}$$
 
-Failures never trigger automatic retries: `$sample` could return different data.
-Staging paths are reported for inspection and explicit cleanup. On launch,
-nonzero exit, timeout, interruption, or transfer-limit failure, up to 64 KiB of
-stderr is retained in a uniquely named `.stderr.log` beside staging data, mode
-0600. Its location is reported without printing server diagnostics. It may
-contain credentials or other sensitive details: inspect locally, redact before
-sharing, and explicitly remove when no longer needed. Successful transfers
-remove temporary stderr storage. Legacy mongo may put errors on stdout; invalid
-or incomplete output fails integrity checks and remains only in private staging.
-The combined transfer limit is polled, so transient disk use can exceed it. Publication uses
-no-overwrite hard links on the local filesystem; the manifest is published last
-and is the completion marker. Treat a final JSONL without its manifest as
-incomplete publication. If metadata publication fails, verify the retained
-staging manifest and JSONL checksum/count, then publish that manifest without
-overwriting any existing file; no new sampling is needed. If metadata generation
-itself failed, retain the raw staging file for diagnosis and choose a new package
-for a deliberate fresh acquisition. Do not use partial files as datasets.
-This is not a transactional two-file commit or a power-loss durability guarantee.
+This rewards all exact neighbors strictly above the cutoff and allows 
+any $k - |H|$ equally scoring records at the boundary to fill the remaining positions. Use this as the primary top-k metric, optionally report raw ID-overlap recall as supplemental. Use exactly the computed similarity scores rather than an arbitrary rounding rule for tie determination, or document a consistent tolerance if floating-point representations require one.
 
-Extraction integrity establishes a complete export; RDKit validation separately
-assesses molecular quality and canonical duplicates. Neither implies population
-representativeness. Both validators stream input, but retain identifiers/issues
-(and RDKit structure groups) in memory. Very large acquisitions will require
-streaming molecular preprocessing and further resource planning.
+### How to interpret the two recalls
+| Top-k recall | Threshold recall | Interpretation                                                                                                     |
+| ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| High         | High             | HNSW identifies nearest neighbors and covers most threshold-relevant molecules.                                    |
+| High         | Low              | HNSW finds most top-k neighbors, but `                                                                             |
+| Low          | High             | HNSW includes all few high-threshold relevant molecules, but misses some lower-scoring members of the exact top-k. |
+| Low          | Low              | HNSW misses many nearest and threshold-relevant molecules; compare against the attainable ceiling and tie policy.  |
 
-## Fingerprint preparation checkpoint
+# Distance Functions
 
-After `notebooks/01_dataset_overview.ipynb` saves an audited split,
-`notebooks/02_fingerprint_generation.ipynb` generates or verifies one artifact.
-It defaults to the existing Chemicalspace package_00 split and never creates a
-missing split. Select another approved saved pool by explicitly changing the
-split path in notebook 02. The overview now describes all eligible structures
-with `descriptor_limit: null`.
+As mentioned above, $T(A,B)$ is the similarity function.
 
-`chemtellect.fingerprints` validates scientific configuration and generates
-sequential batches. `chemtellect.fingerprint_store` validates splits, packs,
-persists, verifies, reconstructs and loads registered index prefixes. Morgan
-connectivity fingerprints use radius 2, 2048 bits and chirality, bond types and
-ring membership, without molecular standardization. Storage is uint8 `(n, 256)`
-NumPy arrays with explicit little bit ordering. See [methodology](docs/fingerprints.md)
-for all scientific choices, limitations, APIs and provenance requirements.
+For this evaluation the binary Morgan fingerprints and Tanimoto similarity is chosen as initial, test case without claiming that these are necessarily the optimal molecular representations.
 
-```bash
-uv run pytest
-uv run jupyter lab notebooks/02_fingerprint_generation.ipynb
-```
+For binary fingerprints, Tanimoto similarity is
 
-Run notebook cells in order using the project's Python kernel. Artifacts go under
-`data/processed/<source>/<package>/fingerprints/<artifact_id>/`; unique run reports
-under `experiments/results/fingerprints/<source>/<package>/<artifact_id>/`.
-Both are excluded from Git. Rerunning verifies all persisted data and linkage,
-without generating molecules again. Corruption fails rather than regenerating.
-Interrupted staging and stale locks require explicit inspection and preservation
-or removal; they are never automatically resumed or published. See recovery
-instructions in the methodology. Raw pools, audits and splits remain unchanged.
+$$T(A,B)= \frac{|A\cap B|}{|A\cup B|}$$
 
-The preparation checkpoint is separate from the retrieval benchmarks below.
-Exact and approximate recall measurements use the same verified saved bits.
+where $A$ and $B$ represent the sets of active fingerprint bits.
 
-## Backend compatibility verification (Step 3)
+The corresponding Jaccard distance is
+$$\boxed{d_J(A,B)=1-T(A,B)}$$
 
-`chemtellect.nmslib_adapter` converts verified packed fingerprints in memory to
-NMSLIB `bit_jaccard` input and compares direct pairwise distances with RDKit
-`1 - TanimotoSimilarity`. Notebook 03 selects the existing artifact and checks
-synthetic cases plus query/index rows 0–9 (210 real-fixture pairs). No fingerprints
-are regenerated and no HNSW graph or nearest-neighbor search is performed.
+Minimizing Jaccard distance is exactly equivalent to maximizing binary Tanimoto similarity.
 
-```bash
-uv run pytest tests/test_nmslib_adapter.py
-uv run jupyter lab notebooks/03_backend_verification.ipynb
-```
+# HNSW parameters
+The parameters below determine how HNSW builds and navigates its search graph.
 
-Edit the single artifact-path cell in notebook 03 to select another existing
-pool. Split linkage and output location derive from verified metadata. The
-backend-independent `nonzero_fingerprints_v1` guard scans **all saved query and
-index rows** before real backend preparation, then the small fixture checks
-compatibility. Future exact and HNSW runs must reuse this guard on all selected
-inputs. See the [nonzero policy](docs/nonzero_fingerprint_policy.md) and
-[backend methodology](docs/backend_verification.md).
+| Parameter        | Purpose                                                 | Trade-off                                                       |
+| ---------------- | ------------------------------------------------------- | --------------------------------------------------------------- |
+| `M`              | Controls graph connectivity                             | More connections increase memory use but can improve recall     |
+| `efConstruction` | Controls candidate exploration while building the graph | More thorough construction is slower                            |
+| `efSearch`       | Controls candidate exploration during queries           | Higher values generally improve recall but increase search work |
 
-Reports use unique filenames under
-`experiments/results/backend_verification/<source>/<package>/<artifact_id>/`.
-Required representation and nonzero distance checks determine success. Native
-zero-input probes are unsupported diagnostics: in the tested NMSLIB 2.1.2 /
-RDKit 2026.09.1 environment, zero/zero gives NaN versus Tanimoto 0 (distance 1).
-No result is patched and no records are removed. The original failure report
-is preserved. A failed full-input guard saves a report and stops before real
-backend preparation. Compatibility checks do not establish recall or performance.
+# Starting configuration of the variables.
 
-## Exact retrieval benchmark (Step 4)
+These are starting configurations, not optimized settings or final conclusions.
 
-`notebooks/04_exact_retrieval.ipynb` selects one existing fingerprint artifact and
-registered index size. `chemtellect.exact_retrieval` verifies provenance and every
-selected nonzero fingerprint, reconstructs RDKit vectors, then benchmarks fresh
-exhaustive scoring and deterministic top-k for k=10,25,50,100. Each k has one
-untimed warmup and five sequential measured passes, with a separate local
-seed-42 timing order. Saved float64 scores are authoritative; ties use exact
-equality and ascending original index position.
+| Variable                    | Initial experimental values              |
+| --------------------------- | ---------------------------------------- |
+| Dataset size                | 1,000 molecules, then 10,000 and 100,000 |
+| Fingerprint                 | Morgan, radius 2, 2,048 bits             |
+| Ground-truth metric         | Binary Tanimoto                          |
+| Similarity threshold $\tau$ | 0.3, 0.5, 0.7, 0.9                       |
+| Retrieved candidates $k$    | 10, 25, 50, 100                          |
+| HNSW metric                 | Jaccard distance                         |
+| HNSW `M`                    | 8, 16, 32                                |
+| HNSW `efSearch`             | 20, 50, 100, 200                         |
+| Query molecules             | 100 sampled from the dataset             |
 
-Unique completed runs under `experiments/results/exact_retrieval/` retain the
-matrix, ordered identities, designated-pass results, raw timings, per-query
-median summaries, provenance and checksums. This is repeated in-memory timing,
-not cold-start or concurrent-service performance. See the
-[methodology](docs/exact_retrieval.md) for APIs, boundaries, publication and
-limitations. No fingerprints or splits are generated by this checkpoint.
+Edge Cases:
+- Query molecules should not be part of the indexed dataset, and duplicate structures should be Identified and removed. 
+- Account for molecules that satisfy threshold after candidate limit is reached. If 80 molecules satisfy a threshold but search requests only 20 HNSW candidates, the maximum possible recall is 25%, regardless of how accurately the graph navigates.
+- Separate retrieval from re-ranking. When the ANN metric differs from Tanimoto, we should measure both candidate generation and exact Tanimoto re-ranking costs.
 
-```bash
-.venv/bin/python -m pytest tests/test_exact_retrieval.py
-.venv/bin/jupyter lab notebooks/04_exact_retrieval.ipynb
-```
+Details left out:
+- Is RDKit's implementation of Morgan fingerprint algorithm any different from other implementations. If yes, what is the most sufficient one to choose.
+- Is Morgan fingerprint with radius 2 well suited compared to radius 0 and 1. What are other options other than Morgan representation?
+- What are molecule representation options other than binary. Current case considers fingerprints that are fixed-length binary Morgan fingerprints, one other trivial option is count-based fingerprints.
 
-## FPSim2 compatibility and paired benchmarking (Step 5)
+# Benchmarking tools
+| Measurement | What it answers                                                  | Proposed tool                      |
+| ----------- | ---------------------------------------------------------------- | ---------------------------------- |
+| Recall      | What proportion of qualifying molecules did HNSW retrieve?       | NumPy and our own evaluation logic |
+| Latency     | How long does each retrieval method take?                        | Python's `time.perf_counter_ns()`  |
+| Memory      | How much RAM do our fingerprint collections and indexes consume? | `psutil`                           |
 
-`notebooks/05_fpsim2_benchmark.ipynb` verifies FPSim2 0.7.4 against an explicit
-completed RDKit run before comparing freshly timed RDKit and FPSim2 requests.
-The saved bits pass full selected-row nonzero validation and conversion/loading
-round trips. Exact float64 top-k and threshold membership gate the comparison;
-native float32 score diagnostics use a separate 1e-6 absolute tolerance.
+## Experimental Protocol v1.0
 
-Both backends execute sequentially, FPSim2 with `n_workers=1`, using shared query
-permutations and alternating backend pass order. Unique runs under
-`experiments/results/fpsim2/` contain new precomputed backend files, complete
-native responses, checks, timings, summaries, provenance, RAM/RSS snapshots and
-PNG/SVG charts. Failed compatibility evidence cannot become a successful speed
-claim. Notebook 04 now offers readable tables/charts and legacy-run inspection;
-missing historical metadata displays as “not recorded”. See
-[FPSim2 methodology](docs/fpsim2.md) for the inspected integration and boundaries.
+The following parameters were used for the first experiment. These are deliberately modest settings.
 
-```bash
-.venv/bin/python -m pytest tests/test_fpsim2.py
-.venv/bin/jupyter lab notebooks/05_fpsim2_benchmark.ipynb
-```
+| Field                        | Pilot value                                                    |
+| ---------------------------- | -------------------------------------------------------------- |
+| Index size per package       | 1,000 validated records                                        |
+| Held-out queries per package | 100                                                            |
+| Initial raw package target   | 1,100 usable records                                           |
+| Query sampling seed          | 42                                                             |
+| Fingerprint                  | New binary Morgan; radius 2; 2,048 bits                        |
+| Exact baseline               | Exhaustive binary Tanimoto against all indexed records         |
+| Approximate backend          | NMSLIB 2.1.2 HNSW, `bit_jaccard`, `OBJECT_AS_STRING`           |
+| HNSW `M`                     | 16                                                             |
+| HNSW `efConstruction`        | 200                                                            |
+| HNSW `efSearch`              | 200                                                            |
+| Candidate counts $k$         | 10, 25, 50, 100                                                |
+| Thresholds $τ$               | 0.3, 0.5, 0.7, 0.9                                             |
+| Query/index record overlap   | None under holdout split                                       |
+| Empty threshold ground truth | Undefined recall; count and report                             |
+| Top-k boundary ties          | Tie-aware scoring                                              |
+| Threshold evaluation         | Reuse fixed candidates for each $k$/query/search configuration |
 
-## Fixed HNSW and three-backend comparison (Step 6)
+There are four additional rules.
 
-`notebooks/06_hnsw_comparison.ipynb` compares freshly timed RDKit, FPSim2 and
-NMSLIB 2.1.2 HNSW with M=16, efConstruction=200, efSearch=200, one construction
-thread and sequential `knnQuery` calls. The independent `package_00` 1K pilot
-remains separate from the `scale_100k_00` parent's nested 1K/10K/100K prefixes.
-Each size gets a fresh graph and fresh exhaustive float64 ground truth.
+1. Empty ground-truth sets: If no other molecule meets a threshold, that query's threshold recall is undefined. We'll exclude it from the mean recall for that threshold and report how frequently this happens.
 
-The existing overview and fingerprint workflows prepared the missing parent
-inputs with unchanged configuration and seed-42 policy. Correctness gates,
-tie-aware top-k and inclusive threshold recall, shared five-pass timing, graph
-costs, memory snapshots and checksummed charts are described in
-[HNSW methodology](docs/hnsw.md). No parameter sweep or 100M prediction is made.
+2. Equal-similarity ties: Different molecules can have identical fingerprint similarity scores. We'll use a tie-aware top-k evaluation to avoid penalizing HNSW simply for returning an equally similar molecule.
 
-```bash
-.venv/bin/python -m pytest tests/test_hnsw.py
-.venv/bin/jupyter lab notebooks/06_hnsw_comparison.ipynb
-```
+3. Fixed candidate pools: For a given $k$, changing $\tau$ will only change the evaluation, not trigger another HNSW search.
+
+4. Timing: Fingerprint generation and index construction will be measured separately from query latency. We'll also record the Python and library versions associated with a benchmark.
+
+# Methodology and Findings
+
+The study asks: **How much faster is approximate HNSW retrieval than exact retrieval, and how many correct neighbors does it miss?**
+### Molecule identity, fingerprints, and collisions
+
+A **query** is a molecule whose neighbors we seek. The **index** is the collection of molecules it is allowed to retrieve.
+
+SMILES can describe the same structure using different strings. The preparation workflow parses and sanitizes molecules and produces canonical, isomeric SMILES—a consistent representation under the approved RDKit procedure. Records with the same canonical representation are grouped, retaining the first physical record as representative. No additional chemical standardization is performed.
+
+No canonical structure appears in both query and index groups. A query therefore cannot receive an easy self-match by finding its own canonical structure in the index.
+
+Each structure is represented by an approved Morgan fingerprint: radius 2, 2,048 bits, chirality enabled. These bits summarize structural features; they are not a complete molecular description. All selected fingerprints must be nonzero.
+
+Different canonical structures can have identical fingerprints. The finite fingerprint representation cannot distinguish them. This is a **fingerprint collision**, distinct from a duplicate canonical structure.
+
+**What the code does with collisions:** it preserves the records and their distinct IDs. It does not merge or discard them because their bits match. Each retains its own matrix column and can occupy its own result position. Identical nonzero fingerprints score 1 against each other and have identical scores against every other query. If a query collides with a different indexed structure, a similarity-1 result is permitted despite self-exclusion.
+
+Collisions and other equal-score cases are handled by the [[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Definitions#Tie-aware top-k recall|tie-aware recall]] rule. Returning the same ID twice is invalid; returning two distinct IDs with identical fingerprints is valid.
+
+#### Example
+The key distinction is a molecule’s identity versus its fingerprint. Two different molecules can have the same fingerprint because the fingerprint is a compressed description of structural features.
+
+Consider this simplified example. Real fingerprints have 2,048 bits; these have only eight:
+
+|Record ID|Molecular structure|Fingerprint|
+|---|---|---|
+|Q|Structure A|`10110100`|
+|17|Structure B|`10110100`|
+|42|Structure C|`10110100`|
+|63|Structure D|`10100100`|
+
+A, B, and C are different structures, but the fingerprint cannot distinguish them. This is a fingerprint collision.
+
+##### Why can Q retrieve records 17 and 42 despite self-exclusion?
+
+Self-exclusion removes Q’s own canonical structure, Structure A, from the searchable index.
+
+It does not remove every structure with the same fingerprint. Records 17 and 42 represent different canonical structures, so they remain eligible.
+
+Their Tanimoto similarity to Q is:
+
+$$T(Q,17)=T(Q,42)=\frac{4\text{ shared set bits}}{4\text{ bits in the union}}=1$$
+
+Thus, similarity 1 means identical fingerprints—not necessarily identical molecules.
+##### What does “each retains its own matrix column” mean?
+
+The similarity matrix stores a score for every indexed record, including records whose fingerprints match:
+
+|Query|Record 17|Record 42|Record 63|
+|---|--:|--:|--:|
+|Q|1.00|1.00|0.75|
+
+The code does not combine columns 17 and 42 into one column. They correspond to two distinct searchable records.
+
+For any other query X, records 17 and 42 will also receive equal scores:
+$$T(X,17)=T(X,42)$$
+because the similarity calculation sees exactly the same bits for both records. Those scores need not be 1; they simply must equal each other.
+
+##### How does this affect the returned results?**
+
+For the example above:
+
+|Request|Returned IDs|Interpretation|
+|---|---|---|
+|Top-1|`[17]`|Fully correct|
+|Top-1|`[42]`|Equally correct|
+|Top-2|`[17, 42]`|Fully correct: two distinct records|
+|Top-2|`[17, 17]`|Invalid: the same record was returned twice|
+|Top-2|`[17, 63]`|Only one of the two best records was recovered|
+
+For top-1, the tie-aware rule accepts either 17 or 42. It does not penalize HNSW merely because RDKit’s saved, deterministically ordered answer chose the other ID.
+
+For top-2, both 17 and 42 belong in the answer. Returning 17 and 63 earns:
+$$R_2=\frac{1}{2}=50\%$$
+##### Does every equal-score tie indicate a fingerprint collision?**
+
+No. Different fingerprints can also have the same Tanimoto score against a particular query.
+
+A collision means the fingerprints themselves are identical. A score tie means their similarity scores against this query are equal. The tie-aware evaluation handles both.
+
+The practical consequence is that this experiment retrieves molecular records, and multiple result positions may contain records with identical fingerprints. It does not require the returned set to contain k distinct fingerprints or k structurally diverse molecules.
+
+### Constructing the similarity matrix and ground truth
+
+For fingerprints A and B, bit-vector Tanimoto similarity is:
+
+$$
+T(A,B)=\frac{|A\cap B|}{|A\cup B|}.
+$$
+Before comparative timing, RDKit compares every query with every indexed fingerprint. For query q and indexed record i, it saves:
+
+$$
+S_{q,i}=T(q,i).
+$$
+
+Each matrix row contains one query's scores against the entire index; each column refers to one indexed record. A small illustrative matrix might be:
+
+| Query / indexed record |    A |    B |    C |    D |
+| ---------------------- | ---: | ---: | ---: | ---: |
+| Query 1                | 0.20 | 0.80 | 0.50 | 0.80 |
+| Query 2                | 0.70 | 0.10 | 0.40 | 0.30 |
+
+For Query 1, exact top-2 membership is {B, D}. At threshold 0.5, the full qualifying set is {B, C, D}. For Query 2, top-2 membership is {A, C}. These answers come directly from the corresponding row.
+
+| Index size |    Matrix shape | Number of scores |
+| ---------- | --------------: | ---------------: |
+| 1K         |     100 × 1,000 |          100,000 |
+| 10K        |    100 × 10,000 |        1,000,000 |
+| 100K       |   100 × 100,000 |       10,000,000 |
+| 1M         | 100 × 1,000,000 |      100,000,000 |
+Scores are stored as float64 in `exact_scores.npy`, with ordered identities in `records.json` and saved top-k evidence in `ground_truth_top_k.json`. At 100K, the score values alone occupy about 80 MB in decimal units.
+
+Each size receives a fresh reference calculation. Adding molecules adds columns and can change the best k results and threshold membership. Scores between an unchanged query and an unchanged indexed fingerprint remain the same.
+
+Ground truth refers to the results obtained by comparing a query molecule against every molecule in the dataset using our chosen fingerprint representation and Tanimoto similarity measure. It establishes which records should be retrieved, not biological activity, usefulness, or complete structural equivalence.
+
+The saved matrix is used only for validation and evaluation. RDKit does the full search again every time we measure its speed, even though we already saved the correct answers for evaluation. 
+
+### Search methods and correctness checks
+
+| Method | How it serves the experiment                                                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------- |
+| RDKit  | Exhaustive scoring followed by exact top-k selection                                                                |
+| FPSim2 | Exact-search implementation using the approved saved fingerprint bits; returned membership is checked against RDKit |
+| HNSW   | Approximate graph search; returned membership is measured against RDKit                                             |
+HNSW uses `NMSLIB` 2.1.2, `bit_jaccard` distance. Parameters: `M = 16`, `efConstruction = 200`, and `efSearch = 200`. 
+`M` controls graph connectivity; `efConstruction` and `efSearch` control construction and search exploration budgets. One construction thread and sequential single-query calls are used. No tuning sweep was performed.
+
+HNSW must return exactly k distinct, valid IDs and finite distances between 0 and 1. Each returned distance is checked against `1 − RDKit similarity`, with absolute tolerance 0.000001 and relative tolerance zero. This tolerance checks native numerical compatibility; it never changes ground-truth membership or recall. Missing good neighbors lowers HNSW recall rather than failing this compatibility check.
+
+### Retrieval quality: per-query recall and mean recall
+
+##### Top-k recall
+Recall that the default policy for [[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Top-$k$ recall evaluation metric|Top-k recall]] used is the [[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Definitions#Tie-aware top-k recall|Tie-aware recall]] which asks: How many of the best k neighbors did the method recover?
+
+$$
+R_k(q)=\frac{|C_k\cap H|+\min(k-|H|,\ |C_k\cap B|)}{k}
+$$
+Ties use direct `float64` equality, with no epsilon. Meaning, we consider scores tied only when their saved `float64` values compare exactly equal. Epsilon would be a small allowance used to treat nearby values as equal.
+
+Saved exact top-k lists break ties by original index position. Meaning, the code orders molecules by:
+
+1. Higher similarity values first.
+2. For equal similarity values, smaller original index position first.
+
+Example:  If a list of three records should be retrieved from the set $\{A,B,C,D\}$ where $B,C$ and $D$ have the same similarity value, the code prioritizes $\{A,B,C\}$. $B$ and $C$ win this tie-breaking step because their index positions precede $D$’s, even though all three have the same similarity value. Simply put, $B$ and $C$ come before $D$.
+
+Mean recall is the arithmetic average of the per-query recalls:
+
+$$
+\overline{R}_k=\frac{1}{Q}\sum_{q=1}^{Q}R_k(q).
+$$
+where $Q$ is the number of queries.
+
+For example, recalls of $100\%$, $90\%$, and $80\%$ average to $90\%$. This does not mean each query achieves $90\%$. The report also shows median and minimum recall to expose some variation between queries. Recall evaluates membership, not the internal ordering of results.
+
+##### Threshold recall
+
+[[Efficiency Evaluation of HNSW-based Approximate Molecular Retrieval#Threshold recall evaluation metric|Threshold recall]] asks: Of all indexed molecules scoring at least $τ$, how many appeared in the returned top-k set? For $τ$ in $\{0.3, 0.5, 0.7, 0.9\}$:
+
+$$
+G_\tau(q)=\{i:S_{q,i}\ge\tau\},\qquad
+R_{\tau,k}(q)=\frac{|C_k(q)\cap G_\tau(q)|}{|G_\tau(q)|}.
+$$
+
+Comparison is inclusive (`>=`) against the float64 threshold, with no tolerance. Every threshold uses the same designated candidate set; there is no additional retrieval for each threshold.
+
+If $200$ molecules qualify but $k = 10$, even perfect top-$10$ retrieval reaches at most $5\%$ threshold recall. The capacity ceiling is:
+
+$$
+R_{\tau,k}^{\max}(q)=\min\left(1,\frac{k}{|G_\tau(q)|}\right).
+$$
+
+### Search repetitions and timing boundaries
+
+Each dataset is tested at $k\in\{10,25,50,100\}$. For every method and $k$, all $100$ queries receive one untimed warm-up pass and five measured passes. Queries execute sequentially. Each $k$ is an independent search, not a truncated top-$100$ result.
+
+For every dataset size, method, and k:
+
+1. Run all $100$ queries once as an untimed warmup.
+2. Run all $100$ queries five more times, recording retrieval times.
+
+Thus, for one method at one k:
+
+$100\text{ queries}\times5\text{ measured passes} =500\text{ timed requests}$
+
+The totals are:
+
+|Scope|Timed retrieval requests|
+|---|--:|
+|One method, one k, one dataset|500|
+|One method, all four k values, one dataset|2,000|
+|All three methods, one dataset|6,000|
+|All three methods, all four dataset comparisons|**24,000**|
+
+There were also **4,800 warmup requests** across the four comparisons, plus separate correctness-check searches.
+
+Each $k$ was searched independently. A top-$100$ result was not reused to manufacture the top-$10$, top-$25$, and top-$50$ timing results.
+
+Within each pass, all methods received the same shuffled query order. Backend execution order also rotated. These controls reduce order-related effects, although they do not eliminate operating-system scheduling or cache effects.
+
+**Recall uses only the first measured pass's candidates.** Later passes provide timing and diagnostics; their results are neither pooled nor selected for best recall.
+
+Retrieval timers include exhaustive scoring plus selection/ordering for RDKit, or native search plus result normalization/ordering for FPSim2 and HNSW. HNSW's internal parsing of its prepared query string is included. 
+
+Fingerprint generation, query preparation, index preparation, graph construction, reference calculation, validation, recall evaluation, writing, and plotting are outside retrieval latency. The new comparison records several separate preparation and evaluation costs, including outside-timer validation/result assembly. Component timings may overlap enclosing stages and must not all be summed. A reported latency describes an already-prepared query and in-memory index, not complete application response time.
+
+### From repeated timings to headline speed
+First take the median of five measured times for each single query:
+
+$$
+m_q=\operatorname{median}(t_{q,1},\ldots,t_{q,5}).
+$$
+
+Then take the median of those 100 per-query medians:
+
+$$
+L=\operatorname{median}(m_1,\ldots,m_{100}).
+$$
+
+This L is the headline latency: the typical query's typical time. For example, five times of 1.30, 1.34, 1.31, 2.10, and 1.33 ms yield a per-query median of 1.33 ms.
+
+The reported mean and p95 are also calculated across the 100 per-query medians, using linear percentile interpolation.
+
+Table below summarizes what do the reported mean and p95 describe.  
+They use the same 100 per-query medians:
+
+| Statistic | Calculation                           | Interpretation                          |
+| --------- | ------------------------------------- | --------------------------------------- |
+| Median$L$ | Middle of the 100 medians             | Typical query’s typical time            |
+| Mean      | Sum of the 100 medians divided by 100 | Average representative time             |
+| p95       | 95th percentile of the 100 medians    | Upper end of representative query times |
+> This p95 describes relatively slow queries after their repeated timings have been summarized.
+
+It does not describe the slowest 5% of all individual requests. A query with four fast repetitions and one very slow repetition can still have a fast median. Consequently, this p95 reduces the influence of occasional timing spikes.
+
+For a baseline B and method H:
+
+$$
+\text{speedup}=L_B/L_H,\qquad
+\text{time saved}=L_B-L_H.
+$$
+
+A speedup above 1 favors H; below 1 favors B. This is a ratio of aggregate latencies, not a mean of individual query speedups.
+
+Suppose the baseline is FPSim2 and the method being evaluated is HNSW:
