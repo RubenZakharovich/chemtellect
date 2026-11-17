@@ -29,7 +29,7 @@ Both questions above measure set overlap rather than the ordering of retrieved m
 The following two sets are constructed for the experiment:
 
 The ground-truth set for threshold $\tau$ in indexed reference records $D$ is
-$$G_\tau(q)=\{x\in D:T(q,x)\geq\tau\}$$
+$G_\tau(q)=\{x\in D:T(q,x)\geq\tau\}$
 
 where $T(q,x)$ is the similarity function.
 
